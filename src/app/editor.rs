@@ -637,7 +637,7 @@ impl Editor {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        if widgets::shortcuts_blocked(ctx) {
             return;
         }
         let (cmd, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));

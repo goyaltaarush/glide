@@ -33,6 +33,27 @@ pub fn keyboard_owned(ctx: &egui::Context) -> bool {
     ctx.memory(|m| m.focused().is_some())
 }
 
+/// Where the pass of the last drawn slider value field is kept.
+const VALUE_FIELD: &str = "kit-value-field";
+
+/// A slider value being typed.
+#[derive(Clone)]
+struct ValueField {
+    text: String,
+    orig: String,
+    focused: bool,
+    seen: u64,
+}
+
+/// Whether the editor's keyboard shortcuts should stand aside this frame:
+/// while text is being typed, including the frame Esc ends a value field
+/// (egui drops its focus before the editor looks).
+pub fn shortcuts_blocked(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    let field_open = ctx.data(|d| d.get_temp::<u64>(egui::Id::new(VALUE_FIELD))).is_some_and(|seen| seen + 1 >= pass);
+    ctx.text_edit_focused() || field_open
+}
+
 /// A labelled slider in Toolcraft's style; returns true when changed.
 /// Click the value to type one, double-click the thumb for `default`, and
 /// use ←/→ (Shift for bigger steps) once it has focus.
@@ -66,49 +87,54 @@ fn slider_impl(ui: &mut Ui, label: &str, v: &mut f64, range: RangeInclusive<f64>
     ui.horizontal(|ui| {
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (edit_id, open_id) = (id.with("edit"), id.with("edit-open"));
-            match ui.data(|d| d.get_temp::<String>(edit_id)) {
-                Some(mut text) => {
-                    let out = egui::TextEdit::singleline(&mut text)
-                        .desired_width(56.0)
-                        .horizontal_align(egui::Align::RIGHT)
-                        .font(egui::FontId::proportional(12.0))
-                        .show(ui);
-                    let r = out.response;
-                    let fresh = !ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
-                    if fresh {
-                        // Open with everything selected, so typing replaces it.
-                        r.request_focus();
-                        let mut state = out.state;
-                        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
-                        state.cursor.set_char_range(Some(all));
-                        state.store(ui.ctx(), r.id);
-                        ui.data_mut(|d| d.insert_temp(open_id, true));
+            let edit_id = id.with("edit");
+            let pass = ui.ctx().cumulative_pass_nr();
+            // A field not drawn last frame (its panel went away) is dropped.
+            let mut field = ui.data(|d| d.get_temp::<ValueField>(edit_id)).filter(|f| f.seen + 1 >= pass);
+            if let Some(f) = field.as_mut() {
+                let out = egui::TextEdit::singleline(&mut f.text)
+                    .desired_width(56.0)
+                    .horizontal_align(egui::Align::RIGHT)
+                    .font(egui::FontId::proportional(12.0))
+                    .show(ui);
+                let r = out.response;
+                if !f.focused {
+                    // Open with everything selected, so typing replaces it.
+                    r.request_focus();
+                    let mut state = out.state;
+                    let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(f.text.chars().count()));
+                    state.cursor.set_char_range(Some(all));
+                    state.store(ui.ctx(), r.id);
+                    f.focused = true;
+                } else if !r.has_focus() {
+                    // Enter, Esc or a click elsewhere ended the edit; only a
+                    // changed text is applied.
+                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    if !esc && f.text != f.orig && let Some(n) = m::parse_typed(&f.text, suffix, lo, hi) {
+                        set(v, fix(n));
                     }
-                    let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
-                    let close = esc || enter || (!fresh && r.lost_focus());
-                    if close {
-                        if !esc && let Some(n) = m::parse_typed(&text, suffix, lo, hi) {
-                            set(v, fix(n));
-                        }
-                        ui.data_mut(|d| {
-                            d.remove::<String>(edit_id);
-                            d.remove::<bool>(open_id);
-                        });
-                    } else {
-                        ui.data_mut(|d| d.insert_temp(edit_id, text));
-                    }
+                    field = None;
                 }
-                None => {
-                    let r = tabular_value(ui, &m::format_value(*v, decimals, suffix), p.secondary);
-                    if r.hovered() && ui.is_enabled() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-                    }
-                    if r.clicked() {
-                        ui.data_mut(|d| d.insert_temp(edit_id, m::format_value(*v, decimals, "")));
-                    }
+            } else {
+                let r = tabular_value(ui, &m::format_value(*v, decimals, suffix), p.secondary);
+                if r.hovered() && ui.is_enabled() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                }
+                if r.clicked() {
+                    let text = m::format_value(*v, decimals, "");
+                    field = Some(ValueField { orig: text.clone(), text, focused: false, seen: pass });
                 }
             }
+            ui.data_mut(|d| match field {
+                Some(mut f) => {
+                    f.seen = pass;
+                    d.insert_temp(edit_id, f);
+                    d.insert_temp(egui::Id::new(VALUE_FIELD), pass);
+                }
+                None => {
+                    d.remove::<ValueField>(edit_id);
+                }
+            });
         });
     });
 
@@ -138,15 +164,19 @@ fn slider_impl(ui: &mut Ui, label: &str, v: &mut f64, range: RangeInclusive<f64>
             set(v, n);
         }
     }
+    // A press anywhere else hands the arrow keys back to the playhead.
+    if resp.has_focus() && ui.input(|i| i.pointer.any_pressed()) && !resp.is_pointer_button_down_on() {
+        resp.surrender_focus();
+    }
     if resp.has_focus() {
         ui.memory_mut(|mem| mem.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
+        // consume_key ignores extra Shift, so ask for exactly what's held.
+        let big = ui.input(|i| i.modifiers.shift);
+        let mods = if big { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
         for (key, dir) in [(egui::Key::ArrowLeft, -1), (egui::Key::ArrowRight, 1)] {
-            for big in [false, true] {
-                let mods = if big { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
-                if ui.input_mut(|i| i.consume_key(mods, key)) {
-                    let n = fix(m::nudge(*v, lo, hi, dir, big));
-                    set(v, n);
-                }
+            if ui.input_mut(|i| i.consume_key(mods, key)) {
+                let n = fix(m::nudge(*v, lo, hi, dir, big));
+                set(v, n);
             }
         }
     }
@@ -446,27 +476,23 @@ pub fn camera_look(ui: &mut Ui, c: &mut crate::project::model::CameraStyle) -> b
         }
     });
     ui.add_space(4.0);
-    let pct = |ui: &mut Ui, label: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>, scale: f64, enabled: bool| {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut x = *v * scale;
-                let r = (*range.start() * scale)..=(*range.end() * scale);
-                if ui.add_enabled(enabled, egui::Slider::new(&mut x, r).suffix(" %").integer().trailing_fill(true)).changed() {
-                    *v = x / scale;
-                }
-            });
+    let d = CameraStyle::default();
+    // Shown as percentages; the model keeps fractions.
+    let pct = |ui: &mut Ui, label: &str, v: &mut f64, range: RangeInclusive<f64>, scale: f64, default: f64, enabled: bool| {
+        ui.add_enabled_ui(enabled, |ui| {
+            let mut x = *v * scale;
+            let r = (*range.start() * scale)..=(*range.end() * scale);
+            if slider(ui, label, &mut x, r, " %", default * scale) {
+                *v = x / scale;
+            }
         });
     };
-    pct(ui, "Size", &mut c.size, 0.1..=0.8, 100.0, true);
+    pct(ui, "Size", &mut c.size, 0.1..=0.8, 100.0, d.size, true);
     // Roundness 0..0.5 of the short side shows as 0..100 %.
-    pct(ui, "Roundness", &mut c.roundness, 0.0..=0.5, 200.0, c.shape.uses_roundness());
-    ui.horizontal(|ui| {
-        ui.label("Border");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_enabled_ui(c.border > 0.0, |ui| color_edit(ui, &mut c.border_color));
-            ui.add(egui::Slider::new(&mut c.border, 0.0..=20.0).suffix(" px").integer().trailing_fill(true));
-        });
+    pct(ui, "Roundness", &mut c.roundness, 0.0..=0.5, 200.0, d.roundness, c.shape.uses_roundness());
+    slider(ui, "Border", &mut c.border, 0.0..=20.0, " px", d.border);
+    row(ui, "Border colour", |ui| {
+        ui.add_enabled_ui(c.border > 0.0, |ui| color_edit(ui, &mut c.border_color));
     });
     row(ui, "Position", |ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
@@ -524,8 +550,12 @@ mod tests {
         }
 
         fn key<R>(&mut self, key: Key, add: impl FnMut(&mut egui::Ui) -> R) -> R {
-            let k = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
-            self.frame(vec![k(true), k(false)], add)
+            self.key_with(key, Modifiers::NONE, add)
+        }
+
+        fn key_with<R>(&mut self, key: Key, modifiers: Modifiers, add: impl FnMut(&mut egui::Ui) -> R) -> R {
+            let k = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+            self.frame(vec![Event::ModifiersChanged(modifiers), k(true), k(false)], add)
         }
     }
 
@@ -670,6 +700,109 @@ mod tests {
         let faint = egui::Color32::from_rgb(0xec, 0xec, 0xee).gamma_multiply(0.2);
         assert_eq!(super::lerp_color(faint, egui::Color32::BLUE, 0.0), faint);
         assert_eq!(super::lerp_color(faint, egui::Color32::BLUE, 1.0), egui::Color32::BLUE);
+    }
+
+    /// One "Padding" slider (0..=60, default 16) whose value lives in a
+    /// RefCell, plus whether shortcuts were blocked at the start of the frame
+    /// (where the editor checks them).
+    fn padding_rig(v: &std::cell::RefCell<f64>, blocked: &std::cell::Cell<bool>) -> impl FnMut(&mut egui::Ui) -> (Pos2, Rect) {
+        move |ui: &mut egui::Ui| {
+            blocked.set(super::shortcuts_blocked(ui.ctx()));
+            measured(ui, |ui| {
+                super::slider(ui, "Padding", &mut v.borrow_mut(), 0.0..=60.0, "%", 16.0);
+            })
+        }
+    }
+
+    #[test]
+    fn a_focused_slider_leaves_shortcuts_working() {
+        let mut rig = Rig::new();
+        let (v, blocked) = (std::cell::RefCell::new(30.0), std::cell::Cell::new(false));
+        let mut ui_fn = padding_rig(&v, &blocked);
+        let (_, track) = rig.idle(&mut ui_fn);
+        rig.click(track.center(), &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        assert!(super::keyboard_owned(&rig.ctx));
+        assert!(!blocked.get());
+    }
+
+    #[test]
+    fn dragging_elsewhere_drops_slider_focus() {
+        let mut rig = Rig::new();
+        let (v, blocked) = (std::cell::RefCell::new(30.0), std::cell::Cell::new(false));
+        let mut ui_fn = padding_rig(&v, &blocked);
+        let (_, track) = rig.idle(&mut ui_fn);
+        rig.click(track.center(), &mut ui_fn);
+        let at = pos2(150.0, 300.0);
+        rig.frame(vec![Event::PointerMoved(at), press(at, true)], &mut ui_fn);
+        rig.frame(vec![Event::PointerMoved(at + vec2(60.0, 0.0))], &mut ui_fn);
+        rig.frame(vec![press(at + vec2(60.0, 0.0), false)], &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        assert!(!super::keyboard_owned(&rig.ctx));
+    }
+
+    #[test]
+    fn shift_arrow_nudges_ten_percent() {
+        let mut rig = Rig::new();
+        let (v, blocked) = (std::cell::RefCell::new(30.0), std::cell::Cell::new(false));
+        let mut ui_fn = padding_rig(&v, &blocked);
+        let (_, track) = rig.idle(&mut ui_fn);
+        rig.click(pos2(thumb_x(track, 30.0, 0.0, 60.0), track.center().y), &mut ui_fn);
+        let before = *v.borrow();
+        rig.key_with(Key::ArrowRight, Modifiers::SHIFT, &mut ui_fn);
+        let after = *v.borrow();
+        assert!((after - (before + 6.0)).abs() < 1e-9, "{before} -> {after}");
+    }
+
+    #[test]
+    fn esc_in_the_value_field_cancels_and_blocks_shortcuts() {
+        let mut rig = Rig::new();
+        let (v, blocked) = (std::cell::RefCell::new(30.0), std::cell::Cell::new(false));
+        let mut ui_fn = padding_rig(&v, &blocked);
+        let (value_at, _) = rig.idle(&mut ui_fn);
+        rig.click(value_at, &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        rig.frame(vec![Event::Text("7".into())], &mut ui_fn);
+        rig.key(Key::Escape, &mut ui_fn);
+        assert!(blocked.get(), "Esc must not reach the editor's shortcuts");
+        rig.idle(&mut ui_fn);
+        rig.key(Key::Enter, &mut ui_fn);
+        assert_eq!(*v.borrow(), 30.0);
+    }
+
+    #[test]
+    fn a_value_field_left_open_while_hidden_is_discarded() {
+        let mut rig = Rig::new();
+        let (v, blocked) = (std::cell::RefCell::new(30.0), std::cell::Cell::new(false));
+        let mut ui_fn = padding_rig(&v, &blocked);
+        let (value_at, _) = rig.idle(&mut ui_fn);
+        rig.click(value_at, &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        rig.frame(vec![Event::Text("7".into())], &mut ui_fn);
+        // The panel goes away (another item selected) and comes back.
+        rig.idle(|_| ());
+        rig.idle(|_| ());
+        rig.idle(&mut ui_fn);
+        rig.key(Key::Enter, &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        assert_eq!(*v.borrow(), 30.0);
+        assert!(!blocked.get());
+    }
+
+    #[test]
+    fn opening_the_value_field_and_clicking_away_keeps_the_value() {
+        let mut rig = Rig::new();
+        let v = std::cell::RefCell::new(2000.0);
+        let mut ui_fn = |ui: &mut egui::Ui| measured(ui, |ui| {
+            super::slider(ui, "Rigidity", &mut v.borrow_mut(), 5.0..=1500.0, "", 170.0);
+        });
+        let (value_at, _) = rig.idle(&mut ui_fn);
+        rig.click(value_at, &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        rig.idle(&mut ui_fn);
+        rig.click(pos2(150.0, 300.0), &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        assert_eq!(*v.borrow(), 2000.0);
     }
 
     #[test]

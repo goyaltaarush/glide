@@ -546,11 +546,13 @@ fn audio(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
             for vo in &mut d.timeline.voiceovers {
                 ui.horizontal(|ui| {
                     caption(ui, &format!("{} · {:.1} s", widgets::fmt_time(vo.start), vo.duration / 1000.0));
-                    ui.add(egui::Slider::new(&mut vo.volume, 0.0..=2.0).show_value(false));
-                    if ui.small_button("Delete").clicked() {
-                        remove = Some(vo.id);
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Delete").clicked() {
+                            remove = Some(vo.id);
+                        }
+                    });
                 });
+                ui.push_id(vo.id, |ui| slider(ui, "Volume", &mut vo.volume, 0.0..=2.0, "", 1.0));
             }
             if let Some(id) = remove {
                 d.timeline.voiceovers.retain(|v| v.id != id);
