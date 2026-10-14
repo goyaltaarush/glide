@@ -290,3 +290,122 @@ pub fn apply(ctx: &egui::Context) {
     ctx.style_mut_of(egui::Theme::Dark, |s| style_for(s, true));
 }
 
+
+/// Colours the inspector controls share, derived from the palette as in
+/// Toolcraft.
+#[derive(Clone, Copy)]
+pub struct KitColors {
+    pub track: Color32,
+    pub hover_tint: Color32,
+    pub active: Color32,
+}
+
+pub fn kit(p: &Palette) -> KitColors {
+    KitColors { track: p.secondary.gamma_multiply(0.38), hover_tint: p.text.gamma_multiply(0.10), active: p.text }
+}
+
+/// Toolcraft's motion: one ease-out curve, 200 ms for changes, 100 ms for
+/// hovers, none at all with Reduce motion on.
+pub mod motion {
+    use std::sync::OnceLock;
+
+    pub const BASE: f32 = 0.2;
+    pub const HOVER: f32 = 0.1;
+
+    pub fn ease_out(t: f32) -> f32 {
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    /// Read once at start; changing the setting takes a relaunch.
+    pub fn reduced() -> bool {
+        static REDUCED: OnceLock<bool> = OnceLock::new();
+        *REDUCED.get_or_init(super::super::macos::reduce_motion)
+    }
+
+    pub fn duration(d: f32) -> f32 {
+        if reduced() { 0.0 } else { d }
+    }
+
+    #[derive(Clone, Copy, Default)]
+    pub struct Tween {
+        from: f32,
+        to: f32,
+        t0: f64,
+        dur: f32,
+    }
+
+    impl Tween {
+        fn at(&self, now: f64) -> (f32, bool) {
+            let t = if self.dur <= 0.0 { 1.0 } else { ((now - self.t0) as f32 / self.dur).clamp(0.0, 1.0) };
+            (egui::lerp(self.from..=self.to, ease_out(t)), t < 1.0)
+        }
+    }
+
+    /// One frame of a tween towards `target`: the value to show, the new
+    /// state, and whether it is still moving. The first frame snaps; a new
+    /// target starts from whatever is showing.
+    pub fn step(prev: Option<Tween>, target: f32, now: f64, dur: f32) -> (f32, Tween, bool) {
+        let mut tw = prev.unwrap_or(Tween { from: target, to: target, t0: now, dur: 0.0 });
+        if tw.to != target {
+            let (shown, _) = tw.at(now);
+            tw = Tween { from: shown, to: target, t0: now, dur };
+        }
+        let (v, busy) = tw.at(now);
+        (v, tw, busy)
+    }
+
+    /// `step` with its state kept in egui's temp data; repaints while moving.
+    pub fn tween(ctx: &egui::Context, id: egui::Id, target: f32, dur: f32) -> f32 {
+        let now = ctx.input(|i| i.time);
+        let prev = ctx.data(|d| d.get_temp::<Tween>(id));
+        let (v, tw, busy) = step(prev, target, now, duration(dur));
+        ctx.data_mut(|d| d.insert_temp(id, tw));
+        if busy {
+            ctx.request_repaint();
+        }
+        v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::motion::{ease_out, step};
+
+    #[test]
+    fn ease_out_is_cubic() {
+        assert_eq!(ease_out(0.0), 0.0);
+        assert_eq!(ease_out(1.0), 1.0);
+        assert!((ease_out(0.5) - 0.875).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tween_snaps_first_then_animates_to_new_targets() {
+        let (v, s, busy) = step(None, 0.4, 10.0, 0.2);
+        assert_eq!(v, 0.4);
+        assert!(!busy);
+        let (v, s, busy) = step(Some(s), 1.0, 10.0, 0.2);
+        assert_eq!(v, 0.4);
+        assert!(busy);
+        let (v, _, busy) = step(Some(s), 1.0, 10.2, 0.2);
+        assert_eq!(v, 1.0);
+        assert!(!busy);
+    }
+
+    #[test]
+    fn retargeting_mid_flight_continues_from_the_shown_value() {
+        let (_, s, _) = step(None, 0.0, 10.0, 0.2);
+        let (_, s, _) = step(Some(s), 1.0, 10.0, 0.2);
+        let (mid, s2, _) = step(Some(s), 1.0, 10.1, 0.2);
+        let (v, _, busy) = step(Some(s2), 0.0, 10.1, 0.2);
+        assert!((v - mid).abs() < 1e-6);
+        assert!(busy);
+    }
+
+    #[test]
+    fn zero_duration_snaps() {
+        let (_, s, _) = step(None, 1.0, 10.0, 0.2);
+        let (v, _, busy) = step(Some(s), 0.0, 10.0, 0.0);
+        assert_eq!(v, 0.0);
+        assert!(!busy);
+    }
+}

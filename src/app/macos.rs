@@ -253,3 +253,8 @@ pub fn install_open_handler() {
         objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, sel, imp, c"v@:@@".as_ptr());
     }
 }
+
+/// Whether "Reduce motion" is on in System Settings → Accessibility.
+pub fn reduce_motion() -> bool {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+}
