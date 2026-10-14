@@ -807,6 +807,10 @@ impl Editor {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(if ui.visuals().dark_mode { Color32::from_rgb(0x1c, 0x1c, 0x1e) } else { Color32::from_rgb(0xe4, 0xe4, 0xe7) }))
             .show(ui, |ui| {
+                // Clicking the backdrop around the video deselects.
+                if ui.interact(ui.max_rect(), ui.id().with("preview-backdrop"), Sense::click()).clicked() {
+                    self.selection = Selection::None;
+                }
                 let avail = ui.available_rect_before_wrap().shrink(24.0);
                 let aspect = self.preview.output_aspect();
                 let mut size = vec2(avail.width(), avail.width() / aspect);

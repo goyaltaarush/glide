@@ -161,6 +161,8 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         let pointer = ui.input(|i| i.pointer.interact_pos());
         let mut drag: Option<Drag> = ui.data(|d| d.get_temp(drag_id));
         let mut hover_cursor = None;
+        // Whether the pointer is over a block, so a click elsewhere deselects.
+        let mut on_item = false;
 
         // Clip track: one block per kept slice.
         for l in &map.links {
@@ -185,6 +187,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                 && r.expand(2.0).contains(pos)
                 && slice.is_some()
             {
+                on_item = true;
                 let near_l = (pos.x - r.left()).abs() < EDGE;
                 let near_r = (pos.x - r.right()).abs() < EDGE;
                 if near_l || near_r {
@@ -233,6 +236,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             if let Some(pos) = pointer
                 && r.expand(2.0).contains(pos)
             {
+                on_item = true;
                 let part = if (pos.x - r.left()).abs() < EDGE {
                     Part::Left
                 } else if (pos.x - r.right()).abs() < EDGE {
@@ -297,6 +301,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             if let Some(pos) = pointer
                 && r.expand(2.0).contains(pos)
             {
+                on_item = true;
                 let part = if (pos.x - r.left()).abs() < EDGE {
                     Part::Left
                 } else if (pos.x - r.right()).abs() < EDGE {
@@ -387,6 +392,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                 if let Some(pos) = pointer
                     && r.expand(2.0).contains(pos)
                 {
+                    on_item = true;
                     let part = if (pos.x - r.left()).abs() < EDGE {
                         Part::Left
                     } else if (pos.x - r.right()).abs() < EDGE {
@@ -404,20 +410,19 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             }
         }
 
-        // Clicking the ruler or empty space moves the playhead.
+        // Clicking the ruler or empty space moves the playhead; clicking empty
+        // track space also deselects.
         if (bg.clicked() || bg.drag_started())
             && drag.is_none()
             && let Some(pos) = pointer
+            && (ruler.contains(pos) || !on_item)
         {
-            let on_item = clip_row.contains(pos) || ((zoom_row.contains(pos) || mask_row.contains(pos)) && ed.selection != Selection::None);
-            if ruler.contains(pos) || !on_item {
-                ed.seek(pb_of(pos.x));
-                if bg.drag_started() {
-                    drag = Some(Drag::Playhead);
-                }
-                if !ruler.contains(pos) && bg.clicked() && !zoom_row.contains(pos) && !mask_row.contains(pos) && !clip_row.contains(pos) {
-                    ed.selection = Selection::None;
-                }
+            ed.seek(pb_of(pos.x));
+            if bg.drag_started() {
+                drag = Some(Drag::Playhead);
+            }
+            if bg.clicked() && !ruler.contains(pos) {
+                ed.selection = Selection::None;
             }
         }
 
