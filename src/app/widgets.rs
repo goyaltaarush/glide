@@ -1,5 +1,7 @@
 //! Small UI building blocks in the macOS/paper-rs style.
 
+use std::ops::RangeInclusive;
+
 use egui::{Color32, CornerRadius, Response, RichText, Sense, Stroke, Ui, vec2};
 
 use super::theme::{self, pal};
@@ -24,23 +26,177 @@ pub fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// A labelled slider; returns true when changed.
-pub fn slider(ui: &mut Ui, label: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>, suffix: &str) -> bool {
+/// Whether a focused control owns the keyboard, so arrow keys go to it and
+/// not to the playhead.
+pub fn keyboard_owned(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused().is_some())
+}
+
+/// A labelled slider in Toolcraft's style; returns true when changed.
+/// Click the value to type one, double-click the thumb for `default`, and
+/// use ←/→ (Shift for bigger steps) once it has focus.
+pub fn slider(ui: &mut Ui, label: &str, v: &mut f64, range: RangeInclusive<f64>, suffix: &str, default: f64) -> bool {
+    slider_impl(ui, label, v, range, None, suffix, default)
+}
+
+/// `slider` that snaps to `step`, with tick marks that show on hover.
+pub fn slider_steps(ui: &mut Ui, label: &str, v: &mut f64, range: RangeInclusive<f64>, step: f64, suffix: &str, default: f64) -> bool {
+    slider_impl(ui, label, v, range, Some(step), suffix, default)
+}
+
+fn slider_impl(ui: &mut Ui, label: &str, v: &mut f64, range: RangeInclusive<f64>, step: Option<f64>, suffix: &str, default: f64) -> bool {
+    use slider_math as m;
+    // Taken before anything is added, so sliders sharing a label don't share state.
+    let id = ui.next_auto_id().with(label);
+    let p = pal(ui);
+    let k = theme::kit(&p);
+    let (lo, hi) = (*range.start(), *range.end());
+    let decimals = m::decimals(lo, hi);
+    let fix = |n: f64| step.map_or(n.clamp(lo, hi), |s| m::snap(n, lo, hi, s));
     let mut changed = false;
+    let mut set = |v: &mut f64, n: f64| {
+        if n != *v {
+            *v = n;
+            changed = true;
+        }
+    };
+
+    // Name, and the value (click to type).
     ui.horizontal(|ui| {
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = ui.add(
-                egui::Slider::new(v, range)
-                    .show_value(true)
-                    .suffix(suffix)
-                    .max_decimals(2)
-                    .trailing_fill(true),
-            );
-            changed = r.changed();
+            let (edit_id, open_id) = (id.with("edit"), id.with("edit-open"));
+            match ui.data(|d| d.get_temp::<String>(edit_id)) {
+                Some(mut text) => {
+                    let out = egui::TextEdit::singleline(&mut text)
+                        .desired_width(56.0)
+                        .horizontal_align(egui::Align::RIGHT)
+                        .font(egui::FontId::proportional(12.0))
+                        .show(ui);
+                    let r = out.response;
+                    let fresh = !ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
+                    if fresh {
+                        // Open with everything selected, so typing replaces it.
+                        r.request_focus();
+                        let mut state = out.state;
+                        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+                        state.cursor.set_char_range(Some(all));
+                        state.store(ui.ctx(), r.id);
+                        ui.data_mut(|d| d.insert_temp(open_id, true));
+                    }
+                    let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+                    let close = esc || enter || (!fresh && r.lost_focus());
+                    if close {
+                        if !esc && let Some(n) = m::parse_typed(&text, suffix, lo, hi) {
+                            set(v, fix(n));
+                        }
+                        ui.data_mut(|d| {
+                            d.remove::<String>(edit_id);
+                            d.remove::<bool>(open_id);
+                        });
+                    } else {
+                        ui.data_mut(|d| d.insert_temp(edit_id, text));
+                    }
+                }
+                None => {
+                    let r = tabular_value(ui, &m::format_value(*v, decimals, suffix), p.secondary);
+                    if r.hovered() && ui.is_enabled() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                    }
+                    if r.clicked() {
+                        ui.data_mut(|d| d.insert_temp(edit_id, m::format_value(*v, decimals, "")));
+                    }
+                }
+            }
         });
     });
+
+    // The track.
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click_and_drag());
+    let track = rect.shrink2(vec2(5.0, 0.0));
+    let x_at = |t: f32| egui::lerp(track.x_range(), t);
+    let on_thumb = |t: f32, pos: egui::Pos2| egui::Rect::from_center_size(egui::pos2(x_at(t), track.center().y), vec2(18.0, 18.0)).contains(pos);
+    let pointer = resp.interact_pointer_pos();
+    let grab_id = id.with("grab");
+    if resp.double_clicked() && pointer.is_some_and(|pos| on_thumb(m::frac(*v, lo, hi), pos)) {
+        set(v, fix(default));
+    } else if resp.is_pointer_button_down_on()
+        && let Some(pos) = pointer
+    {
+        // Pressing the thumb grabs it where it is; pressing the track jumps.
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            resp.request_focus();
+            let t = m::frac(*v, lo, hi);
+            let offset = if on_thumb(t, pos) { x_at(t) - pos.x } else { 0.0 };
+            ui.data_mut(|d| d.insert_temp(grab_id, offset));
+        }
+        let offset: f32 = ui.data(|d| d.get_temp(grab_id).unwrap_or(0.0));
+        let t = (pos.x + offset - track.left()) / track.width();
+        let n = fix(m::from_frac(t, lo, hi));
+        if (m::frac(n, lo, hi) - m::frac(*v, lo, hi)).abs() > f32::EPSILON || resp.dragged() {
+            set(v, n);
+        }
+    }
+    if resp.has_focus() {
+        ui.memory_mut(|mem| mem.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
+        for (key, dir) in [(egui::Key::ArrowLeft, -1), (egui::Key::ArrowRight, 1)] {
+            for big in [false, true] {
+                let mods = if big { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+                if ui.input_mut(|i| i.consume_key(mods, key)) {
+                    let n = fix(m::nudge(*v, lo, hi, dir, big));
+                    set(v, n);
+                }
+            }
+        }
+    }
+
+    // Glide to jumps; follow the pointer exactly while dragging.
+    let dragging = resp.dragged();
+    let shown = theme::motion::tween(ui.ctx(), id.with("pos"), m::frac(*v, lo, hi), if dragging { 0.0 } else { theme::motion::BASE });
+    let over = resp.hover_pos().is_some_and(|pos| on_thumb(shown, pos));
+    let active = ui.is_enabled() && (dragging || over);
+    let grow = theme::motion::tween(ui.ctx(), id.with("grow"), if active { 1.0 } else { 0.0 }, theme::motion::HOVER);
+    if active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let alpha = if ui.is_enabled() { 1.0 } else { 0.25 };
+    let painter = ui.painter_at(rect.expand(4.0));
+    let y = track.center().y;
+    let x = x_at(shown);
+    painter.line_segment([egui::pos2(track.left(), y), egui::pos2(track.right(), y)], Stroke::new(1.0, k.track.gamma_multiply(alpha)));
+    painter.line_segment([egui::pos2(track.left(), y), egui::pos2(x, y)], Stroke::new(1.0, k.active.gamma_multiply(alpha)));
+    if let Some(s) = step {
+        let fade = theme::motion::tween(ui.ctx(), id.with("ticks"), if ui.is_enabled() && (resp.hovered() || dragging) { 1.0 } else { 0.0 }, theme::motion::BASE);
+        let count = ((hi - lo) / s).round() as usize;
+        if fade > 0.0 && (2..=40).contains(&count) {
+            for i in 1..count {
+                let tx = x_at(i as f32 / count as f32);
+                painter.line_segment([egui::pos2(tx, y - 3.0), egui::pos2(tx, y + 3.0)], Stroke::new(1.0, k.active.gamma_multiply(fade * alpha)));
+            }
+        }
+    }
+    let size = 9.0 * egui::lerp(1.0..=1.4, grow);
+    painter.rect_filled(egui::Rect::from_center_size(egui::pos2(x, y), vec2(size, size)), CornerRadius::same(2), k.active.gamma_multiply(alpha));
     changed
+}
+
+/// A value whose digits all take the width of the widest one, so numbers
+/// don't shift as they change (tabular figures without font features).
+fn tabular_value(ui: &mut Ui, text: &str, color: Color32) -> Response {
+    let font = egui::FontId::proportional(12.0);
+    let (digit_w, widths): (f32, Vec<f32>) = ui.ctx().fonts_mut(|f| {
+        let digit_w = ('0'..='9').map(|c| f.glyph_width(&font, c)).fold(0.0, f32::max);
+        (digit_w, text.chars().map(|c| f.glyph_width(&font, c)).collect())
+    });
+    let cells: Vec<f32> = text.chars().zip(&widths).map(|(c, w)| if c.is_ascii_digit() { digit_w } else { *w }).collect();
+    let (rect, resp) = ui.allocate_exact_size(vec2(cells.iter().sum(), 16.0), Sense::click());
+    let mut x = rect.left();
+    for ((c, w), cell) in text.chars().zip(&widths).zip(&cells) {
+        ui.painter().text(egui::pos2(x + (cell - w) / 2.0, rect.center().y), egui::Align2::LEFT_CENTER, c, font.clone(), color);
+        x += cell;
+    }
+    resp
 }
 
 /// macOS-style switch; returns true when toggled.
@@ -312,4 +468,164 @@ pub fn camera_look(ui: &mut Ui, c: &mut crate::project::model::CameraStyle) -> b
     toggle_row(ui, "Shadow", &mut c.shadow);
     toggle_row(ui, "Mirror", &mut c.mirror);
     *c != before
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
+
+    /// Drives real egui frames with synthetic input.
+    struct Rig {
+        ctx: egui::Context,
+        time: f64,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            Rig { ctx: egui::Context::default(), time: 0.0 }
+        }
+
+        /// One frame; `add` returns the rects it wants to report.
+        fn frame<R>(&mut self, events: Vec<Event>, mut add: impl FnMut(&mut egui::Ui) -> R) -> R {
+            self.time += 1.0 / 60.0;
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let mut out = None;
+            let _ = self.ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| out = Some(add(ui)));
+            });
+            out.unwrap()
+        }
+
+        fn idle<R>(&mut self, add: impl FnMut(&mut egui::Ui) -> R) -> R {
+            self.frame(vec![], add)
+        }
+
+        fn click<R>(&mut self, at: Pos2, mut add: impl FnMut(&mut egui::Ui) -> R) -> R {
+            self.frame(vec![Event::PointerMoved(at), press(at, true)], &mut add);
+            self.frame(vec![press(at, false)], &mut add)
+        }
+
+        fn key<R>(&mut self, key: Key, add: impl FnMut(&mut egui::Ui) -> R) -> R {
+            let k = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+            self.frame(vec![k(true), k(false)], add)
+        }
+    }
+
+    fn press(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+    }
+
+    /// Lays out one slider and reports where its value text and track are:
+    /// (value-text point, track rect).
+    fn measured(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> (Pos2, Rect) {
+        let top = ui.cursor().top();
+        add(ui);
+        let bottom = ui.cursor().top() - ui.spacing().item_spacing.y;
+        let w = ui.max_rect().width();
+        (pos2(w - 4.0, top + 8.0), Rect::from_min_max(pos2(5.0, bottom - 18.0), pos2(w - 5.0, bottom)))
+    }
+
+    fn thumb_x(track: Rect, v: f64, lo: f64, hi: f64) -> f32 {
+        egui::lerp(track.x_range(), ((v - lo) / (hi - lo)) as f32)
+    }
+
+    #[test]
+    fn out_of_range_value_is_not_rewritten() {
+        let mut rig = Rig::new();
+        let mut v = 2000.0;
+        for _ in 0..3 {
+            let changed = rig.idle(|ui| super::slider(ui, "Rigidity", &mut v, 5.0..=1500.0, "", 170.0));
+            assert!(!changed);
+        }
+        assert_eq!(v, 2000.0);
+    }
+
+    #[test]
+    fn same_label_sliders_keep_separate_state() {
+        let mut rig = Rig::new();
+        let (mut a, mut b) = (30.0, 30.0);
+        let mut ui_fn = |ui: &mut egui::Ui| {
+            let first = measured(ui, |ui| {
+                super::slider(ui, "Blur", &mut a, 0.0..=60.0, " px", 0.0);
+            });
+            super::slider(ui, "Blur", &mut b, 0.0..=60.0, " px", 0.0);
+            first
+        };
+        let (value_at, _) = rig.idle(&mut ui_fn);
+        rig.click(value_at, &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        rig.frame(vec![Event::Text("7".into())], &mut ui_fn);
+        rig.key(Key::Enter, &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        assert_eq!(a, 7.0);
+        assert_eq!(b, 30.0);
+    }
+
+    #[test]
+    fn double_click_thumb_resets_to_default() {
+        let mut rig = Rig::new();
+        let mut v = 30.0;
+        let mut ui_fn = |ui: &mut egui::Ui| measured(ui, |ui| {
+            super::slider(ui, "Padding", &mut v, 0.0..=60.0, "%", 16.0);
+        });
+        let (_, track) = rig.idle(&mut ui_fn);
+        let at = pos2(thumb_x(track, 30.0, 0.0, 60.0), track.center().y);
+        rig.click(at, &mut ui_fn);
+        rig.click(at, &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        assert_eq!(v, 16.0);
+    }
+
+    #[test]
+    fn arrow_nudges_focused_slider_and_owns_the_keyboard() {
+        let mut rig = Rig::new();
+        let v = std::cell::RefCell::new(30.0);
+        let mut ui_fn = |ui: &mut egui::Ui| measured(ui, |ui| {
+            super::slider(ui, "Padding", &mut v.borrow_mut(), 0.0..=60.0, "%", 16.0);
+        });
+        let (_, track) = rig.idle(&mut ui_fn);
+        rig.click(pos2(thumb_x(track, 30.0, 0.0, 60.0), track.center().y), &mut ui_fn);
+        assert!(super::keyboard_owned(&rig.ctx));
+        let before = *v.borrow();
+        rig.key(Key::ArrowRight, &mut ui_fn);
+        let after = *v.borrow();
+        assert!((after - (before + 0.6)).abs() < 1e-9, "{before} -> {after}");
+    }
+
+    #[test]
+    fn clicking_elsewhere_releases_the_keyboard() {
+        let mut rig = Rig::new();
+        let mut v = 30.0;
+        let mut ui_fn = |ui: &mut egui::Ui| measured(ui, |ui| {
+            super::slider(ui, "Padding", &mut v, 0.0..=60.0, "%", 16.0);
+        });
+        let (_, track) = rig.idle(&mut ui_fn);
+        rig.click(track.center(), &mut ui_fn);
+        assert!(super::keyboard_owned(&rig.ctx));
+        rig.click(pos2(150.0, 350.0), &mut ui_fn);
+        rig.idle(&mut ui_fn);
+        assert!(!super::keyboard_owned(&rig.ctx));
+    }
+
+    #[test]
+    fn dragging_past_the_end_clamps() {
+        let mut rig = Rig::new();
+        let mut v = 30.0;
+        let mut ui_fn = |ui: &mut egui::Ui| measured(ui, |ui| {
+            super::slider(ui, "Padding", &mut v, 0.0..=60.0, "%", 16.0);
+        });
+        let (_, track) = rig.idle(&mut ui_fn);
+        let start = track.center();
+        rig.frame(vec![Event::PointerMoved(start), press(start, true)], &mut ui_fn);
+        for dx in [20.0, 100.0, 300.0, 500.0] {
+            rig.frame(vec![Event::PointerMoved(start + vec2(dx, 0.0))], &mut ui_fn);
+        }
+        rig.frame(vec![press(start + vec2(500.0, 0.0), false)], &mut ui_fn);
+        assert_eq!(v, 60.0);
+    }
 }

@@ -93,6 +93,7 @@ fn swatch(ui: &mut Ui, size: egui::Vec2, selected: bool, paint: impl FnOnce(&egu
 }
 
 fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
+    let ds = Style::default();
     let before = d.style.clone();
     let s = &mut d.style;
     section(ui, "Background", |ui| {
@@ -168,7 +169,7 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
                         }
                     }
                 });
-                slider(ui, "Angle", angle, 0.0..=360.0, "°");
+                slider(ui, "Angle", angle, 0.0..=360.0, "°", 135.0);
                 for (i, (c, _)) in stops.iter_mut().enumerate() {
                     row(ui, if i == 0 { "From" } else { "To" }, |ui| {
                         widgets::color_edit(ui, c);
@@ -201,24 +202,24 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
         }
         // Blurring a flat colour or a gradient changes nothing.
         if matches!(s.background, Background::Wallpaper { .. } | Background::Image { .. }) {
-            slider(ui, "Blur", &mut s.background_blur, 0.0..=60.0, " px");
+            slider(ui, "Blur", &mut s.background_blur, 0.0..=60.0, " px", ds.background_blur);
         }
     });
     section(ui, "Frame", |ui| {
-        slider(ui, "Padding", &mut s.padding, 0.0..=40.0, "%");
+        slider(ui, "Padding", &mut s.padding, 0.0..=40.0, "%", ds.padding);
         row(ui, "Device", |ui| {
             use crate::project::model::DeviceFrame as D;
             segmented(ui, &mut s.device, &[(D::None, "None"), (D::Laptop, "Laptop"), (D::Phone, "Phone"), (D::Tablet, "Tablet")]);
         });
         if s.device == DeviceFrame::None {
-            slider(ui, "Roundness", &mut s.corner_radius, 0.0..=60.0, " px");
+            slider(ui, "Roundness", &mut s.corner_radius, 0.0..=60.0, " px", ds.corner_radius);
         }
-        slider(ui, "Inset", &mut s.inset.padding, 0.0..=60.0, " px");
+        slider(ui, "Inset", &mut s.inset.padding, 0.0..=60.0, " px", ds.inset.padding);
         if s.inset.padding > 0.0 {
             row(ui, "Inset color", |ui| {
                 widgets::color_edit(ui, &mut s.inset.color);
             });
-            slider(ui, "Inset opacity", &mut s.inset.alpha, 0.0..=1.0, "");
+            slider(ui, "Inset opacity", &mut s.inset.alpha, 0.0..=1.0, "", ds.inset.alpha);
         }
         row(ui, "Aspect ratio", |ui| {
             let label = Aspect::PRESETS.iter().find(|(_, a)| *a == s.aspect).map_or("Custom", |(n, _)| n);
@@ -230,10 +231,10 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
         });
     });
     section(ui, "Shadow", |ui| {
-        slider(ui, "Intensity", &mut s.shadow.intensity, 0.0..=1.0, "");
-        slider(ui, "Angle", &mut s.shadow.angle, 0.0..=360.0, "°");
-        slider(ui, "Distance", &mut s.shadow.distance, 0.0..=100.0, " px");
-        slider(ui, "Blur", &mut s.shadow.blur, 0.0..=100.0, " px");
+        slider(ui, "Intensity", &mut s.shadow.intensity, 0.0..=1.0, "", ds.shadow.intensity);
+        slider(ui, "Angle", &mut s.shadow.angle, 0.0..=360.0, "°", ds.shadow.angle);
+        slider(ui, "Distance", &mut s.shadow.distance, 0.0..=100.0, " px", ds.shadow.distance);
+        slider(ui, "Blur", &mut s.shadow.blur, 0.0..=100.0, " px", ds.shadow.blur);
     });
     if s.reveal_background(&before) {
         ed.status = Some(format!("Padding was 0 %, which hides the background, so it's now {} %.", Style::REVEAL_PADDING));
@@ -242,10 +243,10 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
         let c = &mut s.crop;
         let (mut l, mut t, mut r, mut b) = (c.x, c.y, 1.0 - c.x - c.w, 1.0 - c.y - c.h);
         let mut ch = false;
-        ch |= slider(ui, "Left", &mut l, 0.0..=0.45, "");
-        ch |= slider(ui, "Right", &mut r, 0.0..=0.45, "");
-        ch |= slider(ui, "Top", &mut t, 0.0..=0.45, "");
-        ch |= slider(ui, "Bottom", &mut b, 0.0..=0.45, "");
+        ch |= slider(ui, "Left", &mut l, 0.0..=0.45, "", 0.0);
+        ch |= slider(ui, "Right", &mut r, 0.0..=0.45, "", 0.0);
+        ch |= slider(ui, "Top", &mut t, 0.0..=0.45, "", 0.0);
+        ch |= slider(ui, "Bottom", &mut b, 0.0..=0.45, "", 0.0);
         if ch {
             *c = crate::engine::geom::Rect::new(l, t, (1.0 - l - r).max(0.1), (1.0 - t - b).max(0.1));
         }
@@ -266,23 +267,26 @@ fn spring_picker(ui: &mut Ui, label: &str, cfg: &mut Option<SpringConfig>, prese
         }
     });
     if let Some(c) = cfg {
+        // Reset to the first preset.
+        let base = presets.iter().find_map(|(_, p)| *p).unwrap_or(*c);
         egui::CollapsingHeader::new("Customize").id_salt(label).show(ui, |ui| {
             caption(ui, "Motion follows Newtonian physics: a mass on a spring.");
-            slider(ui, "Rigidity", &mut c.stiffness, 5.0..=1500.0, "");
-            slider(ui, "Smoothness", &mut c.damping, 5.0..=200.0, "");
-            slider(ui, "Momentum", &mut c.mass, 0.1..=15.0, "");
+            slider(ui, "Rigidity", &mut c.stiffness, 5.0..=1500.0, "", base.stiffness);
+            slider(ui, "Smoothness", &mut c.damping, 5.0..=200.0, "", base.damping);
+            slider(ui, "Momentum", &mut c.mass, 0.1..=15.0, "", base.mass);
         });
     }
 }
 
 fn cursor(ui: &mut Ui, d: &mut Project, no_data: bool) {
+    let (dc, da) = (CursorStyle::default(), AudioStyle::default());
     let c = &mut d.style.cursor;
     if no_data {
         caption(ui, "This recording has no cursor data.");
     }
     section(ui, "Cursor", |ui| {
         toggle_row(ui, "Hide cursor", &mut c.hide);
-        slider(ui, "Size", &mut c.size, 0.5..=4.0, "×");
+        slider(ui, "Size", &mut c.size, 0.5..=4.0, "×", dc.size);
         row(ui, "Style", |ui| {
             segmented(ui, &mut c.skin, &[(CursorSkin::Touch, "Touch"), (CursorSkin::Vector, "Vector"), (CursorSkin::System, "System")]);
         });
@@ -299,27 +303,27 @@ fn cursor(ui: &mut Ui, d: &mut Project, no_data: bool) {
                 ("Off", None),
             ],
         );
-        slider(ui, "Tilt", &mut c.tilt, 0.0..=1.0, "");
+        slider(ui, "Tilt", &mut c.tilt, 0.0..=1.0, "", dc.tilt);
         let mut idle = c.hide_idle_ms.is_some();
         if toggle_row(ui, "Hide when idle", &mut idle) {
             c.hide_idle_ms = idle.then_some(2000.0);
         }
         if let Some(ms) = &mut c.hide_idle_ms {
-            slider(ui, "Idle after", ms, 500.0..=10_000.0, " ms");
+            slider(ui, "Idle after", ms, 500.0..=10_000.0, " ms", 2000.0);
         }
         let mut lp = c.loop_ms.is_some();
         if toggle_row(ui, "Loop position at end", &mut lp) {
             c.loop_ms = lp.then_some(1000.0);
         }
         if let Some(ms) = &mut c.loop_ms {
-            slider(ui, "Loop over", ms, 300.0..=5000.0, " ms");
+            slider(ui, "Loop over", ms, 300.0..=5000.0, " ms", 1000.0);
         }
         let mut freeze = c.freeze_ms > 0.0;
         if toggle_row(ui, "Freeze at end", &mut freeze) {
             c.freeze_ms = if freeze { 1000.0 } else { 0.0 };
         }
         if c.freeze_ms > 0.0 {
-            slider(ui, "Freeze for", &mut c.freeze_ms, 200.0..=5000.0, " ms");
+            slider(ui, "Freeze for", &mut c.freeze_ms, 200.0..=5000.0, " ms", 1000.0);
         }
     });
     section(ui, "Clicks", |ui| {
@@ -336,16 +340,17 @@ fn cursor(ui: &mut Ui, d: &mut Project, no_data: bool) {
             };
         }
         if let ClickEffect::Ripple { strength } = &mut c.click_effect {
-            slider(ui, "Strength", strength, 0.5..=5.0, "");
+            slider(ui, "Strength", strength, 0.5..=5.0, "", 2.0);
         }
         toggle_row(ui, "Click sounds", &mut d.style.audio.click_sounds);
         if d.style.audio.click_sounds {
-            slider(ui, "Click volume", &mut d.style.audio.click_volume, 0.0..=1.0, "");
+            slider(ui, "Click volume", &mut d.style.audio.click_volume, 0.0..=1.0, "", da.click_volume);
         }
     });
 }
 
 fn camera(ui: &mut Ui, d: &mut Project, has: bool) {
+    let dc = CameraStyle::default();
     if !has {
         caption(ui, "Record with the camera on to add a camera bubble.");
         return;
@@ -359,18 +364,18 @@ fn camera(ui: &mut Ui, d: &mut Project, has: bool) {
                 segmented(ui, &mut c.aspect, &[(CameraAspect::Horizontal, "16:9"), (CameraAspect::Vertical, "9:16"), (CameraAspect::Square, "1:1"), (CameraAspect::Original, "Auto")]);
             });
         }
-        slider(ui, "Size while zoomed", &mut c.zoom_scale, 0.3..=1.0, "×");
+        slider(ui, "Size while zoomed", &mut c.zoom_scale, 0.3..=1.0, "×", dc.zoom_scale);
     });
     section(ui, "Fine position", |ui| {
-        slider(ui, "Horizontal", &mut c.position.x, 0.0..=1.0, "");
-        slider(ui, "Vertical", &mut c.position.y, 0.0..=1.0, "");
+        slider(ui, "Horizontal", &mut c.position.x, 0.0..=1.0, "", dc.position.x);
+        slider(ui, "Vertical", &mut c.position.y, 0.0..=1.0, "", dc.position.y);
     });
 }
 
 fn captions(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
     section(ui, "Captions", |ui| {
         toggle_row(ui, "Show captions", &mut d.style.captions.show);
-        slider(ui, "Size", &mut d.style.captions.size, 0.5..=2.0, "×");
+        slider(ui, "Size", &mut d.style.captions.size, 0.5..=2.0, "×", CaptionStyle::default().size);
         if ed.rec.transcript.is_empty() {
             caption(ui, "No transcript yet.");
             if ed.rec.meta.mic.is_some() {
@@ -469,9 +474,10 @@ fn transcribe_controls(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn audio(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
+    let da = AudioStyle::default();
     let a = &mut d.style.audio;
     section(ui, "Audio", |ui| {
-        slider(ui, "Volume", &mut a.volume, 0.0..=2.0, "");
+        slider(ui, "Volume", &mut a.volume, 0.0..=2.0, "", da.volume);
         let peaks = *ed.peaks.lock().unwrap_or_else(|e| e.into_inner());
         let silent = |p: Option<f32>| peaks.is_some() && super::editor::TrackPeaks::silent(p);
         if ed.rec.meta.mic.is_some() {
@@ -509,7 +515,7 @@ fn audio(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
         });
         if let Some(m) = &a.music {
             caption(ui, &std::path::Path::new(m).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-            slider(ui, "Music volume", &mut a.music_volume, 0.0..=1.0, "");
+            slider(ui, "Music volume", &mut a.music_volume, 0.0..=1.0, "", da.music_volume);
         }
     });
     section(ui, "Voice-over", |ui| {
@@ -536,7 +542,7 @@ fn audio(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
         if !d.timeline.voiceovers.is_empty() {
             toggle_row(ui, "Lower recorded audio", &mut d.style.audio.duck_under_voiceover);
             if d.style.audio.duck_under_voiceover {
-                slider(ui, "Level under voice", &mut d.style.audio.duck_level, 0.0..=1.0, "");
+                slider(ui, "Level under voice", &mut d.style.audio.duck_level, 0.0..=1.0, "", da.duck_level);
             }
             let mut remove = None;
             for vo in &mut d.timeline.voiceovers {
@@ -560,7 +566,7 @@ fn shortcuts(ui: &mut Ui, d: &mut Project, keys: usize) {
     section(ui, "Keyboard shortcuts", |ui| {
         toggle_row(ui, "Show shortcuts", &mut s.show);
         toggle_row(ui, "Include single keys", &mut s.single_keys);
-        slider(ui, "Size", &mut s.size, 0.5..=2.0, "×");
+        slider(ui, "Size", &mut s.size, 0.5..=2.0, "×", ShortcutStyle::default().size);
         if keys == 0 {
             caption(ui, "No key presses were recorded. Grant Glide Input Monitoring in System Settings › Privacy & Security to capture them.");
         } else {
@@ -570,6 +576,7 @@ fn shortcuts(ui: &mut Ui, d: &mut Project, keys: usize) {
 }
 
 fn animation(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
+    let dm = MotionBlur::default();
     section(ui, "Zoom animation", |ui| {
         let mut cfg = Some(d.style.screen_spring);
         spring_picker(ui, "Style", &mut cfg, &[("Focused", Some(SpringConfig::SCREEN_FOCUSED)), ("Smooth", Some(SpringConfig::SCREEN_SMOOTH))]);
@@ -579,15 +586,15 @@ fn animation(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
     });
     section(ui, "Motion blur", |ui| {
         let m = &mut d.style.motion_blur;
-        slider(ui, "Amount", &mut m.amount, 0.0..=1.0, "");
+        slider(ui, "Amount", &mut m.amount, 0.0..=1.0, "", dm.amount);
         egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
-            slider(ui, "Cursor", &mut m.cursor, 0.0..=1.0, "");
-            slider(ui, "Screen movement", &mut m.screen_move, 0.0..=1.0, "");
-            slider(ui, "Zoom", &mut m.screen_zoom, 0.0..=1.0, "");
+            slider(ui, "Cursor", &mut m.cursor, 0.0..=1.0, "", dm.cursor);
+            slider(ui, "Screen movement", &mut m.screen_move, 0.0..=1.0, "", dm.screen_move);
+            slider(ui, "Zoom", &mut m.screen_zoom, 0.0..=1.0, "", dm.screen_zoom);
         });
     });
     section(ui, "Automatic zooms", |ui| {
-        slider(ui, "Default zoom", &mut d.style.default_zoom, 1.2..=4.0, "×");
+        slider(ui, "Default zoom", &mut d.style.default_zoom, 1.2..=4.0, "×", Style::default().default_zoom);
         if ui.button("Regenerate from clicks").clicked() {
             let events = crate::engine::events::Events::new(ed.rec.mouse.clone());
             let zooms = crate::engine::zoom::auto_zooms(&events.downs, ed.rec.meta.duration_ms, d.style.default_zoom, &mut d.timeline);
@@ -616,10 +623,11 @@ fn animation(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
 }
 
 fn zoom_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
+    let dz = Zoom::default();
     let Some(z) = d.timeline.zooms.iter_mut().find(|z| z.id == id) else { return };
     let mut delete = false;
     section(ui, "Zoom", |ui| {
-        slider(ui, "Zoom level", &mut z.scale, 1.0..=5.0, "×");
+        slider(ui, "Zoom level", &mut z.scale, 1.0..=5.0, "×", dz.scale);
         let mut mode = match z.mode {
             ZoomMode::Auto => 0,
             ZoomMode::Manual { .. } => 1,
@@ -634,10 +642,10 @@ fn zoom_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
         }
         if let ZoomMode::Manual { target } = &mut z.mode {
             caption(ui, "Click the preview to choose where to zoom.");
-            slider(ui, "X", &mut target.x, 0.0..=1.0, "");
-            slider(ui, "Y", &mut target.y, 0.0..=1.0, "");
+            slider(ui, "X", &mut target.x, 0.0..=1.0, "", 0.5);
+            slider(ui, "Y", &mut target.y, 0.0..=1.0, "", 0.5);
         } else {
-            slider(ui, "Edge snapping", &mut z.snap_edges, 0.0..=0.5, "");
+            slider(ui, "Edge snapping", &mut z.snap_edges, 0.0..=0.5, "", dz.snap_edges);
         }
         toggle_row(ui, "Instant (no animation)", &mut z.instant);
         toggle_row(ui, "Disabled", &mut z.disabled);
@@ -654,6 +662,7 @@ fn zoom_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
 }
 
 fn slice_panel(ui: &mut Ui, d: &mut Project, id: u64) {
+    let ds = Slice::default();
     let Some(s) = d.timeline.slices.iter_mut().find(|s| s.id == id) else { return };
     section(ui, "Clip", |ui| {
         ui.label("Speed");
@@ -664,8 +673,8 @@ fn slice_panel(ui: &mut Ui, d: &mut Project, id: u64) {
                 }
             }
         });
-        slider(ui, "Mic volume", &mut s.mic_volume, 0.0..=2.0, "");
-        slider(ui, "System volume", &mut s.system_volume, 0.0..=2.0, "");
+        slider(ui, "Mic volume", &mut s.mic_volume, 0.0..=2.0, "", ds.mic_volume);
+        slider(ui, "System volume", &mut s.system_volume, 0.0..=2.0, "", ds.system_volume);
         toggle_row(ui, "Hide cursor", &mut s.hide_cursor);
         toggle_row(ui, "Raw cursor movement", &mut s.no_smoothing);
         caption(ui, &format!("Source {} – {}", widgets::fmt_time(s.start), widgets::fmt_time(s.end)));
@@ -678,7 +687,7 @@ fn layout_panel(ui: &mut Ui, d: &mut Project, id: u64) {
         segmented(ui, &mut l.kind, &[(LayoutKind::Both, "Both"), (LayoutKind::ScreenOnly, "Screen"), (LayoutKind::CameraOnly, "Camera")]);
         if l.kind == LayoutKind::Both {
             let mut size = l.camera_size.unwrap_or(0.35);
-            if slider(ui, "Camera size", &mut size, 0.1..=0.8, "") {
+            if slider(ui, "Camera size", &mut size, 0.1..=0.8, "", 0.35) {
                 l.camera_size = Some(size);
             }
         }
@@ -687,6 +696,7 @@ fn layout_panel(ui: &mut Ui, d: &mut Project, id: u64) {
 
 fn mask_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
     use crate::project::model::{Mask, MaskKind};
+    let dm = Mask::default();
     let Some(m) = d.timeline.masks.iter_mut().find(|m| m.id == id) else { return };
     let mut delete = false;
     section(ui, "Mask", |ui| {
@@ -696,17 +706,17 @@ fn mask_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
             m.amount = Mask::default_amount(m.kind);
         }
         match m.kind {
-            MaskKind::Blur => slider(ui, "Blur", &mut m.amount, 2.0..=60.0, " px"),
-            MaskKind::Pixelate => slider(ui, "Pixel size", &mut m.amount, 4.0..=60.0, " px"),
-            MaskKind::Highlight => slider(ui, "Dim", &mut m.amount, 0.1..=0.95, ""),
+            MaskKind::Blur => slider(ui, "Blur", &mut m.amount, 2.0..=60.0, " px", Mask::default_amount(MaskKind::Blur)),
+            MaskKind::Pixelate => slider(ui, "Pixel size", &mut m.amount, 4.0..=60.0, " px", Mask::default_amount(MaskKind::Pixelate)),
+            MaskKind::Highlight => slider(ui, "Dim", &mut m.amount, 0.1..=0.95, "", Mask::default_amount(MaskKind::Highlight)),
         };
-        slider(ui, "Roundness", &mut m.radius, 0.0..=60.0, " px");
+        slider(ui, "Roundness", &mut m.radius, 0.0..=60.0, " px", dm.radius);
         caption(ui, "Drag on the preview to draw the region; drag inside it to move.");
         egui::CollapsingHeader::new("Position").show(ui, |ui| {
-            slider(ui, "Left", &mut m.rect.x, 0.0..=1.0, "");
-            slider(ui, "Top", &mut m.rect.y, 0.0..=1.0, "");
-            slider(ui, "Width", &mut m.rect.w, 0.01..=1.0, "");
-            slider(ui, "Height", &mut m.rect.h, 0.01..=1.0, "");
+            slider(ui, "Left", &mut m.rect.x, 0.0..=1.0, "", dm.rect.x);
+            slider(ui, "Top", &mut m.rect.y, 0.0..=1.0, "", dm.rect.y);
+            slider(ui, "Width", &mut m.rect.w, 0.01..=1.0, "", dm.rect.w);
+            slider(ui, "Height", &mut m.rect.h, 0.01..=1.0, "", dm.rect.h);
         });
         caption(ui, &format!("{} – {}", widgets::fmt_time(m.start), widgets::fmt_time(m.end)));
         ui.horizontal(|ui| {

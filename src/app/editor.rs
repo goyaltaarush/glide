@@ -668,10 +668,12 @@ impl Editor {
             self.delete_selection();
         }
         let step = 1000.0 / 60.0;
-        if pressed(egui::Key::ArrowLeft) {
+        // A focused control (a slider) takes the arrow keys instead.
+        let arrows = !widgets::keyboard_owned(ctx);
+        if arrows && pressed(egui::Key::ArrowLeft) {
             self.seek(self.playhead - if shift { 1000.0 } else { step });
         }
-        if pressed(egui::Key::ArrowRight) {
+        if arrows && pressed(egui::Key::ArrowRight) {
             self.seek(self.playhead + if shift { 1000.0 } else { step });
         }
         if pressed(egui::Key::Escape) {
