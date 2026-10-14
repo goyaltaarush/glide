@@ -39,5 +39,16 @@ mv "$STAGE" "$APP"
 rm -rf "$APP.old"
 codesign --verify --strict "$APP"
 ln -sf "Glide.app/Contents/MacOS/glide" dist/glide
+# Install a copy where launchers (Spotlight, Raycast, Alfred) look.
+# GLIDE_INSTALL_DIR= (empty) skips it.
+INSTALL_DIR="${GLIDE_INSTALL_DIR-$HOME/Applications}"
+if [ -n "$INSTALL_DIR" ]; then
+  mkdir -p "$INSTALL_DIR"
+  rm -rf "$INSTALL_DIR/.Glide.app.new"
+  ditto "$APP" "$INSTALL_DIR/.Glide.app.new"
+  rm -rf "$INSTALL_DIR/Glide.app"
+  mv "$INSTALL_DIR/.Glide.app.new" "$INSTALL_DIR/Glide.app"
+  echo "installed $INSTALL_DIR/Glide.app"
+fi
 echo "built $APP (signed: $IDENTITY)"
 echo "open:  open $APP      cli: dist/glide --help"
