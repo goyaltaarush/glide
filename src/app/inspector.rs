@@ -20,6 +20,10 @@ const GRADIENTS: [(&str, [u8; 3], [u8; 3], f64); 6] = [
 ];
 
 pub fn ui(ui: &mut Ui, ed: &mut Editor) {
+    theme::with_inspector_style(ui, |ui| panel(ui, ed));
+}
+
+fn panel(ui: &mut Ui, ed: &mut Editor) {
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         let mut draft = ed.project.clone();
         match ed.selection {
@@ -258,14 +262,8 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
 
 fn spring_picker(ui: &mut Ui, label: &str, cfg: &mut Option<SpringConfig>, presets: &[(&str, Option<SpringConfig>)]) {
     ui.label(label);
-    ui.horizontal_wrapped(|ui| {
-        for (name, p) in presets {
-            let sel = cfg == p;
-            if ui.selectable_label(sel, *name).clicked() {
-                *cfg = *p;
-            }
-        }
-    });
+    let options: Vec<_> = presets.iter().map(|(name, p)| (*p, *name)).collect();
+    segmented(ui, cfg, &options);
     if let Some(c) = cfg {
         // Reset to the first preset.
         let base = presets.iter().find_map(|(_, p)| *p).unwrap_or(*c);

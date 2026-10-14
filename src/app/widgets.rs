@@ -10,17 +10,18 @@ mod slider_math;
 
 /// A titled inspector section.
 pub fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    ui.add_space(10.0);
+    ui.label(RichText::new(title).font(theme::semibold(theme::SECONDARY)).color(pal(ui).secondary));
     ui.add_space(6.0);
-    ui.label(RichText::new(title).font(theme::semibold(theme::SECONDARY + 1.0)).color(pal(ui).secondary));
-    ui.add_space(4.0);
     add(ui);
-    ui.add_space(8.0);
+    ui.add_space(10.0);
     ui.separator();
 }
 
 /// Label on the left, control on the right.
 pub fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
+        ui.set_min_height(22.0);
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
     });
@@ -208,7 +209,9 @@ pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
     }
     let t = theme::motion::tween(ui.ctx(), resp.id, if *on { 1.0 } else { 0.0 }, theme::motion::BASE);
     let alpha = if ui.is_enabled() { 1.0 } else { 0.25 };
-    let bg = lerp_color(pal(ui).text.gamma_multiply(0.20), theme::accent(), t);
+    // Toolcraft's faint off track disappears on these panels; use a solid grey.
+    let off = if ui.visuals().dark_mode { Color32::from_rgb(0x4a, 0x4a, 0x4d) } else { Color32::from_rgb(0xd9, 0xd9, 0xdc) };
+    let bg = lerp_color(off, theme::accent(), t);
     ui.painter().rect_filled(rect, CornerRadius::same(8), bg.gamma_multiply(alpha));
     let x = egui::lerp(rect.left() + 8.0..=rect.right() - 8.0, t);
     ui.painter().circle_filled(egui::pos2(x, rect.center().y), 7.0, Color32::WHITE.gamma_multiply(alpha));
@@ -224,7 +227,9 @@ pub fn toggle_row(ui: &mut Ui, label: &str, on: &mut bool) -> bool {
 
 pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgba_unmultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
+    // Color32 stores premultiplied components; mixing them as such keeps
+    // translucent colours right (opaque ones are unaffected).
+    Color32::from_rgba_premultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
 }
 
 /// Segmented control in Toolcraft's outline style: equal items across the
@@ -658,6 +663,13 @@ mod tests {
         rig.click(r.center(), &mut ui_fn);
         drop(ui_fn);
         assert!(on);
+    }
+
+    #[test]
+    fn lerp_color_keeps_translucent_colours() {
+        let faint = egui::Color32::from_rgb(0xec, 0xec, 0xee).gamma_multiply(0.2);
+        assert_eq!(super::lerp_color(faint, egui::Color32::BLUE, 0.0), faint);
+        assert_eq!(super::lerp_color(faint, egui::Color32::BLUE, 1.0), egui::Color32::BLUE);
     }
 
     #[test]

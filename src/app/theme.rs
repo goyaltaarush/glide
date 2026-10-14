@@ -291,6 +291,37 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 
+/// Toolcraft's control style for the inspector: 6 px corners, a faint tint
+/// on hover instead of growing, 12 px text, matching popups.
+pub fn inspector_style(s: &mut egui::Style, dark: bool) {
+    use egui::TextStyle as T;
+    let p = palette(dark);
+    let k = kit(&p);
+    for t in [T::Body, T::Button] {
+        s.text_styles.insert(t, FontId::proportional(12.0));
+    }
+    let w = &mut s.visuals.widgets;
+    let base = w.inactive.weak_bg_fill;
+    for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        state.corner_radius = CornerRadius::same(6);
+        state.expansion = 0.0;
+    }
+    w.hovered.bg_fill = blend(base, k.hover_tint);
+    w.hovered.weak_bg_fill = blend(base, k.hover_tint);
+    s.visuals.window_fill = p.popover;
+    s.visuals.menu_corner_radius = CornerRadius::same(6);
+}
+
+/// Runs `add` with the inspector style, leaving the rest of the app alone.
+pub fn with_inspector_style<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope(|ui| {
+        let dark = ui.visuals().dark_mode;
+        inspector_style(ui.style_mut(), dark);
+        add(ui)
+    })
+    .inner
+}
+
 /// Colours the inspector controls share, derived from the palette as in
 /// Toolcraft.
 #[derive(Clone, Copy)]
@@ -370,6 +401,31 @@ pub mod motion {
 #[cfg(test)]
 mod tests {
     use super::motion::{ease_out, step};
+
+    #[test]
+    fn inspector_style_rounds_flattens_and_shrinks_text() {
+        let mut s = egui::Style::default();
+        super::inspector_style(&mut s, true);
+        let w = &s.visuals.widgets;
+        for state in [&w.inactive, &w.hovered, &w.active, &w.open] {
+            assert_eq!(state.corner_radius, egui::CornerRadius::same(6));
+            assert_eq!(state.expansion, 0.0);
+        }
+        assert_eq!(s.text_styles[&egui::TextStyle::Body].size, 12.0);
+        assert_eq!(s.text_styles[&egui::TextStyle::Button].size, 12.0);
+    }
+
+    #[test]
+    fn inspector_style_stays_inside_the_inspector() {
+        let ctx = egui::Context::default();
+        super::apply(&ctx);
+        let mut inside = 0.0;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::with_inspector_style(ui, |ui| inside = ui.style().text_styles[&egui::TextStyle::Body].size);
+        });
+        assert_eq!(inside, 12.0);
+        assert_eq!(ctx.global_style().text_styles[&egui::TextStyle::Body].size, super::BODY);
+    }
 
     #[test]
     fn ease_out_is_cubic() {
