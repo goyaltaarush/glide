@@ -18,8 +18,9 @@ Restyle in place. The public functions in `src/app/widgets.rs` keep their
 names and roles; their bodies are rewritten. Call sites in
 `src/app/inspector.rs` change only where a signature changes (slider
 `default`). Shared motion and colour tokens live in `src/app/theme.rs`.
-egui's global style is tuned so the egui controls that stay (buttons,
-ComboBox, TextEdit, colour picker) blend in.
+egui's style is tuned inside the inspector panel only (not app-wide, so
+the toolbar, timeline and home stay as they are) so the egui controls that
+stay there (buttons, ComboBox, TextEdit, colour picker) blend in.
 
 ## Tokens (`theme.rs`)
 
@@ -84,7 +85,7 @@ and colour over `BASE`.
 hairline separator. `row`: label 12 px `text`, control right-aligned,
 22 px min height. Slider rows use the same label style.
 
-### Global egui style (`theme::apply`)
+### Inspector-scoped egui style (`theme::inspector_style`, applied in `inspector::ui`)
 
 Buttons, ComboBox, TextEdit, colour button: 6 px radius, `hover_tint` on
 hover, no hover expansion, 12 px body text, popups with `popover` fill and
