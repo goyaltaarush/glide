@@ -20,9 +20,15 @@ ICONSET="$CARGO_TARGET_DIR/AppIcon.iconset"
 rm -rf "$ICONSET"
 "$BIN" icon "$ICONSET" >/dev/null
 iconutil -c icns -o "$STAGE/Contents/Resources/AppIcon.icns" "$ICONSET"
+# Prefer an Apple certificate; fall back to a local self-signed one (it isn't
+# trusted, so it only shows without -v, but codesign accepts it and its hash
+# stays the same across builds, which is what keeps the grants).
 IDENTITY="${GLIDE_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+[ -n "$IDENTITY" ] || IDENTITY="$(security find-identity -p codesigning | awk -F'"' '/Glide Local Signing/ {print $2; exit}')"
 if [ -z "$IDENTITY" ]; then
-  echo "warning: no signing identity found; ad-hoc signing (permissions reset on every rebuild)" >&2
+  echo "warning: no signing identity found; ad-hoc signing (permissions reset on every rebuild)." >&2
+  echo "         Create one: Keychain Access > Certificate Assistant > Create a Certificate," >&2
+  echo "         name \"Glide Local Signing\", type Code Signing." >&2
   IDENTITY=-
 fi
 codesign --force --sign "$IDENTITY" --identifier com.heyfabrika.glide "$STAGE"
