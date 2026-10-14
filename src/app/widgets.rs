@@ -199,21 +199,19 @@ fn tabular_value(ui: &mut Ui, text: &str, color: Color32) -> Response {
     resp
 }
 
-/// macOS-style switch; returns true when toggled.
+/// Toolcraft-style switch: a small pill whose thumb eases across.
 pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
-    let size = vec2(30.0, 18.0);
-    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(28.0, 16.0), Sense::click());
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();
     }
-    let t = ui.ctx().animate_bool(resp.id, *on);
-    let p = pal(ui);
-    let off = if ui.visuals().dark_mode { Color32::from_rgb(0x4a, 0x4a, 0x4d) } else { Color32::from_rgb(0xd9, 0xd9, 0xdc) };
-    let bg = lerp_color(off, theme::accent(), t);
-    ui.painter().rect_filled(rect, CornerRadius::same(9), bg);
-    let x = egui::lerp(rect.left() + 9.0..=rect.right() - 9.0, t);
-    ui.painter().circle(egui::pos2(x, rect.center().y), 7.0, Color32::WHITE, Stroke::new(0.5, p.control_border));
+    let t = theme::motion::tween(ui.ctx(), resp.id, if *on { 1.0 } else { 0.0 }, theme::motion::BASE);
+    let alpha = if ui.is_enabled() { 1.0 } else { 0.25 };
+    let bg = lerp_color(pal(ui).text.gamma_multiply(0.20), theme::accent(), t);
+    ui.painter().rect_filled(rect, CornerRadius::same(8), bg.gamma_multiply(alpha));
+    let x = egui::lerp(rect.left() + 8.0..=rect.right() - 8.0, t);
+    ui.painter().circle_filled(egui::pos2(x, rect.center().y), 7.0, Color32::WHITE.gamma_multiply(alpha));
     resp
 }
 
@@ -229,36 +227,46 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
 }
 
-/// Segmented control. Returns true when the selection changed.
+/// Segmented control in Toolcraft's outline style: equal items across the
+/// full width, with the selection sliding between them. Returns true when
+/// the selection changed.
 pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str)]) -> bool {
-    let mut changed = false;
+    let id = ui.next_auto_id().with("segmented");
     let p = pal(ui);
-    egui::Frame::new()
-        .fill(if ui.visuals().dark_mode { Color32::from_rgb(0x1f, 0x1f, 0x21) } else { Color32::from_rgb(0xe3, 0xe3, 0xe6) })
-        .corner_radius(CornerRadius::same(7))
-        .inner_margin(egui::Margin::same(2))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            // Inside right-aligned rows items flow right to left; add them in
-            // reverse so they still read left to right.
-            let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;
-            ui.horizontal(|ui| {
-                let order: Vec<&(T, &str)> = if rtl { options.iter().rev().collect() } else { options.iter().collect() };
-                for (v, label) in order {
-                    let sel = *value == *v;
-                    let text = RichText::new(*label).size(theme::SECONDARY + 1.0);
-                    let b = egui::Button::new(text)
-                        .fill(if sel { if ui.visuals().dark_mode { Color32::from_rgb(0x5c, 0x5c, 0x60) } else { Color32::WHITE } } else { Color32::TRANSPARENT })
-                        .stroke(if sel { Stroke::new(0.5, p.control_border) } else { Stroke::NONE })
-                        .corner_radius(CornerRadius::same(5))
-                        .min_size(vec2(0.0, 20.0));
-                    if ui.add(b).clicked() && !sel {
-                        *value = *v;
-                        changed = true;
-                    }
-                }
-            });
-        });
+    let k = theme::kit(&p);
+    let alpha = if ui.is_enabled() { 1.0 } else { 0.25 };
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+    let inner = rect.shrink(2.0);
+    let w = inner.width() / options.len().max(1) as f32;
+    let cell = |i: usize| egui::Rect::from_min_size(egui::pos2(inner.left() + i as f32 * w, inner.top()), vec2(w, inner.height()));
+    let mut changed = false;
+    let mut hovered = None;
+    for (i, (v, _)) in options.iter().enumerate() {
+        let r = ui.interact(cell(i), id.with(i), Sense::click());
+        if r.hovered() {
+            hovered = Some(i);
+        }
+        if r.clicked() && *value != *v {
+            *value = *v;
+            changed = true;
+        }
+    }
+    let selected = options.iter().position(|(v, _)| *v == *value);
+
+    let painter = ui.painter();
+    painter.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, p.control_border.gamma_multiply(alpha)), egui::StrokeKind::Inside);
+    if let Some(h) = hovered.filter(|h| Some(*h) != selected) {
+        painter.rect_filled(cell(h), CornerRadius::same(4), k.hover_tint.gamma_multiply(alpha));
+    }
+    if let Some(sel) = selected {
+        let at = theme::motion::tween(ui.ctx(), id.with("at"), sel as f32, theme::motion::BASE);
+        let r = egui::Rect::from_min_size(egui::pos2(inner.left() + at * w, inner.top()), vec2(w, inner.height()));
+        ui.painter().rect_filled(r, CornerRadius::same(4), p.text.gamma_multiply(0.16 * alpha));
+    }
+    for (i, (_, label)) in options.iter().enumerate() {
+        let color = if Some(i) == selected { p.text } else { p.secondary };
+        ui.painter().text(cell(i).center(), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(12.0), color.gamma_multiply(alpha));
+    }
     changed
 }
 
@@ -610,6 +618,46 @@ mod tests {
         rig.click(pos2(150.0, 350.0), &mut ui_fn);
         rig.idle(&mut ui_fn);
         assert!(!super::keyboard_owned(&rig.ctx));
+    }
+
+    #[test]
+    fn segmented_click_selects() {
+        let mut rig = Rig::new();
+        let mut value = 0;
+        let mut changed = false;
+        let mut ui_fn = |ui: &mut egui::Ui| {
+            let top = ui.cursor().top();
+            changed |= super::segmented(ui, &mut value, &[(0, "None"), (1, "Circle"), (2, "Ripple")]);
+            Rect::from_min_max(pos2(0.0, top), pos2(ui.max_rect().width(), ui.cursor().top() - ui.spacing().item_spacing.y))
+        };
+        let r = rig.idle(&mut ui_fn);
+        rig.click(pos2(r.left() + r.width() * 5.0 / 6.0, r.center().y), &mut ui_fn);
+        drop(ui_fn);
+        assert_eq!(value, 2);
+        assert!(changed);
+    }
+
+    #[test]
+    fn segmented_items_fill_width() {
+        let mut rig = Rig::new();
+        let mut value = 0;
+        let width = rig.idle(|ui| {
+            ui.set_max_width(300.0);
+            ui.scope(|ui| super::segmented(ui, &mut value, &[(0, "A"), (1, "B")])).response.rect.width()
+        });
+        assert!((width - 300.0).abs() <= 1.0, "{width}");
+    }
+
+    #[test]
+    fn switch_toggles_on_click() {
+        let mut rig = Rig::new();
+        let mut on = false;
+        let mut ui_fn = |ui: &mut egui::Ui| super::switch(ui, &mut on).rect;
+        let r = rig.idle(&mut ui_fn);
+        assert_eq!(r.size(), vec2(28.0, 16.0));
+        rig.click(r.center(), &mut ui_fn);
+        drop(ui_fn);
+        assert!(on);
     }
 
     #[test]
