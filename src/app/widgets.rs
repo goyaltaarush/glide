@@ -4,6 +4,8 @@ use egui::{Color32, CornerRadius, Response, RichText, Sense, Stroke, Ui, vec2};
 
 use super::theme::{self, pal};
 
+mod slider_math;
+
 /// A titled inspector section.
 pub fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.add_space(6.0);
